@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::{env, fs, path::PathBuf};
 use tauri::{path::BaseDirectory, AppHandle, Manager, State};
 
+include!(concat!(env!("OUT_DIR"), "/bundled_token.rs"));
+
 struct AppState {
     db_path: PathBuf,
 }
@@ -147,6 +149,14 @@ fn read_token(app: &AppHandle) -> Result<String, String> {
             if !trimmed.is_empty() {
                 return Ok(trimmed.to_string());
             }
+        }
+    }
+
+    if let Some(token) = BUNDLED_GITHUB_TOKEN {
+        let trimmed = token.trim();
+
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
         }
     }
 
