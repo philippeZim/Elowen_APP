@@ -290,6 +290,7 @@ async function bookSlot(startTime: string, endTime: string): Promise<void> {
   state.bookingSlot = bookingSlot;
   state.syncError = null;
   render();
+  await waitForPaint();
 
   try {
     const response = await invoke<BookSlotResponse>("book_time_slot", {
@@ -320,6 +321,7 @@ async function releaseSlot(startTime: string, endTime: string): Promise<void> {
   state.bookingSlot = bookingSlot;
   state.syncError = null;
   render();
+  await waitForPaint();
 
   try {
     const response = await invoke<SlotActionResponse>("release_time_slot", {
@@ -377,6 +379,14 @@ async function logout(): Promise<void> {
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
+  });
+}
+
+function waitForPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
   });
 }
 
@@ -507,14 +517,14 @@ function renderCalendarScreen(): void {
                       <span>${reservation ? `Gebucht von ${escapeHtml(reservation.user_name)}` : "Verfügbar"}</span>
                     </div>
                     <button
-                      class="button ${reservation ? (isOwnReservation ? "button-secondary" : "button-booked") : "button-secondary"}"
+                      class="button ${reservation ? (isOwnReservation ? "button-secondary" : "button-booked") : "button-secondary"} ${isBooking ? "is-loading" : ""}"
                       type="button"
                       data-slot-action="${action}"
                       data-start-time="${slot.startTime}"
                       data-end-time="${slot.endTime}"
                       ${isBooking || (reservation && !isOwnReservation) ? "disabled" : ""}
                     >
-                      ${isBooking ? `<span class="button-spinner" aria-hidden="true"></span>` : ""}
+                      ${isBooking ? `<span class="button-spinner" aria-hidden="true"><span></span></span>` : ""}
                       ${buttonText}
                     </button>
                   </div>
