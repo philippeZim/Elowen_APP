@@ -227,6 +227,10 @@ input:focus {
 
 .button {
   min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   padding: 0 16px;
 }
 
@@ -255,6 +259,22 @@ input:focus {
   color: var(--destructive);
   background: var(--full-bg);
   border-color: hsl(0 72% 45% / 0.24);
+}
+
+.button-spinner {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  animation: button-spin 720ms linear infinite;
+}
+
+@keyframes button-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .form-error {

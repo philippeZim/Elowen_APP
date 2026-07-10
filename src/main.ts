@@ -514,6 +514,7 @@ function renderCalendarScreen(): void {
                       data-end-time="${slot.endTime}"
                       ${isBooking || (reservation && !isOwnReservation) ? "disabled" : ""}
                     >
+                      ${isBooking ? `<span class="button-spinner" aria-hidden="true"></span>` : ""}
                       ${buttonText}
                     </button>
                   </div>
