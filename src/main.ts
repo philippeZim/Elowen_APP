@@ -258,8 +258,9 @@ async function bookSlot(startTime: string, endTime: string): Promise<void> {
     state.reservations = response.reservations;
     state.syncError = null;
   } catch (error) {
-    state.syncError = error instanceof Error ? error.message : String(error);
+    const bookingError = error instanceof Error ? error.message : String(error);
     await loadReservations();
+    state.syncError = bookingError;
   } finally {
     state.bookingSlot = null;
     render();

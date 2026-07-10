@@ -125,7 +125,16 @@ fn read_token(app: &AppHandle) -> Result<String, String> {
         }
     }
 
-    let mut token_paths = vec![PathBuf::from("token.txt")];
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut token_paths = vec![
+        PathBuf::from("token.txt"),
+        PathBuf::from("../token.txt"),
+        manifest_dir.join("token.txt"),
+    ];
+
+    if let Some(project_root) = manifest_dir.parent() {
+        token_paths.push(project_root.join("token.txt"));
+    }
 
     if let Ok(resource_dir) = app.path().resource_dir() {
         token_paths.push(resource_dir.join("token.txt"));
