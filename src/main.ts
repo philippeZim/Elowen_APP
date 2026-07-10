@@ -5,11 +5,27 @@ type User = {
   name: string;
 };
 
+type Reservation = {
+  reservation_date: string;
+  start_time: string;
+  end_time: string;
+  user_name: string;
+  created_at: string;
+};
+
+type BookSlotResponse = {
+  reservations: Reservation[];
+};
+
 type AppState = {
   user: User | null;
   visibleMonth: Date;
   selectedDate: Date;
   error: string | null;
+  syncError: string | null;
+  reservations: Reservation[];
+  bookingSlot: string | null;
+  isSyncing: boolean;
   isTransitioning: boolean;
   screen: "calendar" | "settings";
   theme: "light" | "dark";
@@ -23,20 +39,23 @@ const state: AppState = {
   visibleMonth: new Date(),
   selectedDate: new Date(),
   error: null,
+  syncError: null,
+  reservations: [],
+  bookingSlot: null,
+  isSyncing: false,
   isTransitioning: false,
   screen: "calendar",
   theme: "light",
 };
 
 const weekdayLabels = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
-const timeSlots = ["08:00 - 12:00", "12:00 - 16:00", "16:00 - 20:00"];
+const timeSlots = [
+  { startTime: "08:00", endTime: "12:00", label: "08:00 - 12:00" },
+  { startTime: "12:00", endTime: "16:00", label: "12:00 - 16:00" },
+  { startTime: "16:00", endTime: "20:00", label: "16:00 - 20:00" },
+];
 const localUserKey = "elowen.currentUser";
 const themeKey = "elowen.theme";
-const reservationsByDay = new Map<string, number>([
-  ["2026-07-12", 1],
-  ["2026-07-18", 2],
-  ["2026-07-25", 3],
-]);
 
 function requireApp(): HTMLDivElement {
   if (!app) {
@@ -154,7 +173,9 @@ function formatSelectedDate(date: Date): string {
 }
 
 function getDayStatus(dateKey: string): DayStatus {
-  const reservationCount = reservationsByDay.get(dateKey) ?? 0;
+  const reservationCount = state.reservations.filter(
+    (reservation) => reservation.reservation_date === dateKey,
+  ).length;
 
   if (reservationCount >= timeSlots.length) {
     return "full";
@@ -186,6 +207,63 @@ function goToToday(): void {
   state.visibleMonth = new Date(today.getFullYear(), today.getMonth(), 1);
   state.selectedDate = today;
   render();
+}
+
+function getReservationForSlot(
+  reservationDate: string,
+  startTime: string,
+  endTime: string,
+): Reservation | undefined {
+  return state.reservations.find(
+    (reservation) =>
+      reservation.reservation_date === reservationDate &&
+      reservation.start_time === startTime &&
+      reservation.end_time === endTime,
+  );
+}
+
+async function loadReservations(): Promise<void> {
+  state.isSyncing = true;
+  render();
+
+  try {
+    state.reservations = await invoke<Reservation[]>("list_reservations");
+    state.syncError = null;
+  } catch (error) {
+    state.syncError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.isSyncing = false;
+    render();
+  }
+}
+
+async function bookSlot(startTime: string, endTime: string): Promise<void> {
+  if (!state.user) {
+    return;
+  }
+
+  const reservationDate = toDateKey(state.selectedDate);
+  const bookingSlot = `${reservationDate}:${startTime}:${endTime}`;
+  state.bookingSlot = bookingSlot;
+  state.syncError = null;
+  render();
+
+  try {
+    const response = await invoke<BookSlotResponse>("book_time_slot", {
+      reservationDate,
+      startTime,
+      endTime,
+      userName: state.user.name,
+    });
+    state.reservations = response.reservations;
+    state.syncError = null;
+  } catch (error) {
+    state.syncError = error instanceof Error ? error.message : String(error);
+    await loadReservations();
+  } finally {
+    state.bookingSlot = null;
+    render();
+  }
 }
 
 function showSettings(): void {
@@ -321,20 +399,40 @@ function renderCalendarScreen(): void {
               <p class="eyebrow">Ausgewählter Tag</p>
               <h2>${formatSelectedDate(state.selectedDate)}</h2>
             </div>
+            <button class="button button-secondary" id="sync-button" type="button" ${state.isSyncing ? "disabled" : ""}>
+              ${state.isSyncing ? "Lädt" : "Sync"}
+            </button>
           </div>
+          ${state.syncError ? `<p class="form-error sync-error">${escapeHtml(state.syncError)}</p>` : ""}
           <div class="slot-list">
             ${timeSlots
-              .map(
-                (slot) => `
-                  <div class="slot-row">
+              .map((slot) => {
+                const reservation = getReservationForSlot(
+                  selectedKey,
+                  slot.startTime,
+                  slot.endTime,
+                );
+                const bookingKey = `${selectedKey}:${slot.startTime}:${slot.endTime}`;
+                const isBooking = state.bookingSlot === bookingKey;
+
+                return `
+                  <div class="slot-row ${reservation ? "slot-booked" : ""}">
                     <div>
-                      <strong>${slot}</strong>
-                      <span>Verfügbar</span>
+                      <strong>${slot.label}</strong>
+                      <span>${reservation ? `Gebucht von ${escapeHtml(reservation.user_name)}` : "Verfügbar"}</span>
                     </div>
-                    <button class="button button-secondary" type="button">Frei</button>
+                    <button
+                      class="button ${reservation ? "button-booked" : "button-secondary"}"
+                      type="button"
+                      data-start-time="${slot.startTime}"
+                      data-end-time="${slot.endTime}"
+                      ${reservation || isBooking ? "disabled" : ""}
+                    >
+                      ${isBooking ? "Bucht" : reservation ? "Belegt" : "Buchen"}
+                    </button>
                   </div>
-                `,
-              )
+                `;
+              })
               .join("")}
           </div>
         </aside>
@@ -350,6 +448,16 @@ function renderCalendarScreen(): void {
   });
   document.querySelector("#today-button")?.addEventListener("click", goToToday);
   document.querySelector("#settings-button")?.addEventListener("click", showSettings);
+  document.querySelector("#sync-button")?.addEventListener("click", () => void loadReservations());
+  document.querySelectorAll<HTMLButtonElement>("[data-start-time][data-end-time]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const { startTime, endTime } = button.dataset;
+
+      if (startTime && endTime) {
+        void bookSlot(startTime, endTime);
+      }
+    });
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-date]").forEach((button) => {
     button.addEventListener("click", () => {
       const dateKey = button.dataset.date;
@@ -444,6 +552,7 @@ async function handleRegister(event: SubmitEvent): Promise<void> {
     state.user = user;
     state.isTransitioning = false;
     render();
+    await loadReservations();
   } catch (error) {
     state.isTransitioning = false;
     state.error = error instanceof Error ? error.message : String(error);
@@ -456,6 +565,10 @@ async function init(): Promise<void> {
   applyTheme();
   state.user = await getPersistedUser();
   render();
+
+  if (state.user) {
+    await loadReservations();
+  }
 }
 
 window.addEventListener("DOMContentLoaded", () => void init());

@@ -251,9 +251,19 @@ input:focus {
   background: var(--muted-bg);
 }
 
+.button-booked {
+  color: var(--destructive);
+  background: var(--full-bg);
+  border-color: hsl(0 72% 45% / 0.24);
+}
+
 .form-error {
   color: var(--destructive);
   font-size: 0.875rem;
+}
+
+.sync-error {
+  margin-bottom: 12px;
 }
 
 .app-shell {
@@ -545,6 +555,10 @@ input:focus {
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) - 2px);
+}
+
+.slot-booked {
+  background: var(--full-bg);
 }
 
 .slot-row div {
