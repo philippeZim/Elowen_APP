@@ -17,15 +17,22 @@ type BookSlotResponse = {
   reservations: Reservation[];
 };
 
+type TokenStatus = {
+  configured: boolean;
+};
+
 type AppState = {
   user: User | null;
   visibleMonth: Date;
   selectedDate: Date;
   error: string | null;
   syncError: string | null;
+  tokenConfigured: boolean;
+  tokenMessage: string | null;
   reservations: Reservation[];
   bookingSlot: string | null;
   isSyncing: boolean;
+  isSavingToken: boolean;
   isTransitioning: boolean;
   screen: "calendar" | "settings";
   theme: "light" | "dark";
@@ -40,9 +47,12 @@ const state: AppState = {
   selectedDate: new Date(),
   error: null,
   syncError: null,
+  tokenConfigured: false,
+  tokenMessage: null,
   reservations: [],
   bookingSlot: null,
   isSyncing: false,
+  isSavingToken: false,
   isTransitioning: false,
   screen: "calendar",
   theme: "light",
@@ -141,6 +151,35 @@ async function persistUser(name: string): Promise<User> {
 
     console.error(error);
     throw new Error("Registrierung nicht möglich.");
+  }
+}
+
+async function loadTokenStatus(): Promise<void> {
+  try {
+    const status = await invoke<TokenStatus>("get_github_token_status");
+    state.tokenConfigured = status.configured;
+  } catch (error) {
+    console.error(error);
+    state.tokenConfigured = false;
+  }
+}
+
+async function saveGithubToken(token: string): Promise<void> {
+  state.isSavingToken = true;
+  state.tokenMessage = null;
+  render();
+
+  try {
+    const status = await invoke<TokenStatus>("save_github_token", { token });
+    state.tokenConfigured = status.configured;
+    state.tokenMessage = "Token gespeichert.";
+    state.syncError = null;
+    await loadReservations();
+  } catch (error) {
+    state.tokenMessage = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.isSavingToken = false;
+    render();
   }
 }
 
@@ -501,6 +540,27 @@ function renderSettingsScreen(): void {
               <span></span>
             </label>
           </div>
+
+          <form id="github-token-form" class="settings-row settings-token-row">
+            <div>
+              <p class="eyebrow">GitHub Token</p>
+              <h2>${state.tokenConfigured ? "Gespeichert" : "Nicht gespeichert"}</h2>
+              ${state.tokenMessage ? `<p class="settings-message">${escapeHtml(state.tokenMessage)}</p>` : ""}
+            </div>
+            <div class="token-controls">
+              <input
+                id="github-token-input"
+                name="token"
+                type="password"
+                autocomplete="off"
+                placeholder="Token einfügen"
+                ${state.isSavingToken ? "disabled" : ""}
+              />
+              <button class="button button-secondary" type="submit" ${state.isSavingToken ? "disabled" : ""}>
+                ${state.isSavingToken ? "Speichert" : "Speichern"}
+              </button>
+            </div>
+          </form>
         </div>
       </section>
     </section>
@@ -509,6 +569,9 @@ function renderSettingsScreen(): void {
   document.querySelector("#back-button")?.addEventListener("click", showCalendar);
   document.querySelector("#logout-button")?.addEventListener("click", () => void logout());
   document.querySelector("#theme-toggle")?.addEventListener("change", toggleTheme);
+  document
+    .querySelector<HTMLFormElement>("#github-token-form")
+    ?.addEventListener("submit", handleTokenSubmit);
 }
 
 function render(): void {
@@ -561,10 +624,31 @@ async function handleRegister(event: SubmitEvent): Promise<void> {
   }
 }
 
+async function handleTokenSubmit(event: SubmitEvent): Promise<void> {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+
+  const formData = new FormData(form);
+  const token = String(formData.get("token") ?? "").trim();
+
+  if (!token) {
+    state.tokenMessage = "Bitte Token einfügen.";
+    render();
+    return;
+  }
+
+  await saveGithubToken(token);
+}
+
 async function init(): Promise<void> {
   state.theme = getStoredTheme();
   applyTheme();
   state.user = await getPersistedUser();
+  await loadTokenStatus();
   render();
 
   if (state.user) {

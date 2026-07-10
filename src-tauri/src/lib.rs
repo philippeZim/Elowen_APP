@@ -59,6 +59,11 @@ struct BookSlotResponse {
     reservations: Vec<Reservation>,
 }
 
+#[derive(Serialize)]
+struct TokenStatus {
+    configured: bool,
+}
+
 fn connect(db_path: &PathBuf) -> Result<Connection, String> {
     Connection::open(db_path).map_err(|error| error.to_string())
 }
@@ -102,6 +107,16 @@ fn init_database(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(db_path)
 }
 
+fn github_token_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
+
+    Ok(app_data_dir.join("github_token.txt"))
+}
+
 fn github_url() -> String {
     format!(
         "https://api.github.com/repos/{}/{}/contents/{}",
@@ -122,6 +137,16 @@ fn read_token(app: &AppHandle) -> Result<String, String> {
 
         if !trimmed.is_empty() {
             return Ok(trimmed.to_string());
+        }
+    }
+
+    if let Ok(token_path) = github_token_path(app) {
+        if let Ok(token) = fs::read_to_string(token_path) {
+            let trimmed = token.trim();
+
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
+            }
         }
     }
 
@@ -154,7 +179,61 @@ fn read_token(app: &AppHandle) -> Result<String, String> {
         }
     }
 
-    Err("GitHub token missing. Add token.txt locally or set ELOWEN_GITHUB_TOKEN.".into())
+    Err("GitHub token fehlt. Speichere ihn in den Einstellungen.".into())
+}
+
+fn write_app_token(app: &AppHandle, token: &str) -> Result<(), String> {
+    let trimmed = token.trim();
+
+    if trimmed.is_empty() {
+        return Err("Token darf nicht leer sein.".into());
+    }
+
+    let token_path = github_token_path(app)?;
+    fs::write(&token_path, trimmed).map_err(|error| error.to_string())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let permissions = fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&token_path, permissions).map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn migrate_legacy_token(app: &AppHandle) -> Result<(), String> {
+    if let Ok(token_path) = github_token_path(app) {
+        if let Ok(token) = fs::read_to_string(token_path) {
+            if !token.trim().is_empty() {
+                return Ok(());
+            }
+        }
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut token_paths = vec![
+        PathBuf::from("token.txt"),
+        PathBuf::from("../token.txt"),
+        manifest_dir.join("token.txt"),
+    ];
+
+    if let Some(project_root) = manifest_dir.parent() {
+        token_paths.push(project_root.join("token.txt"));
+    }
+
+    for token_path in token_paths {
+        if let Ok(token) = fs::read_to_string(token_path) {
+            let trimmed = token.trim();
+
+            if !trimmed.is_empty() {
+                return write_app_token(app, trimmed);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn fetch_remote_database(token: &str) -> Result<(RemoteDatabase, Option<String>), String> {
@@ -368,6 +447,20 @@ fn logout_user(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_github_token_status(app: AppHandle) -> TokenStatus {
+    TokenStatus {
+        configured: read_token(&app).is_ok(),
+    }
+}
+
+#[tauri::command]
+fn save_github_token(token: String, app: AppHandle) -> Result<TokenStatus, String> {
+    write_app_token(&app, &token)?;
+
+    Ok(TokenStatus { configured: true })
+}
+
+#[tauri::command]
 fn sync_reservations(app: AppHandle, state: State<'_, AppState>) -> Result<SyncStatus, String> {
     let reservations = sync_remote_to_local(&app, &state.db_path)?;
 
@@ -474,6 +567,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let db_path = init_database(app.handle()).expect("failed to initialize database");
+            if let Err(error) = migrate_legacy_token(app.handle()) {
+                eprintln!("failed to migrate GitHub token: {error}");
+            }
             app.manage(AppState { db_path });
             Ok(())
         })
@@ -481,6 +577,8 @@ pub fn run() {
             get_current_user,
             register_user,
             logout_user,
+            get_github_token_status,
+            save_github_token,
             list_reservations,
             sync_reservations,
             book_time_slot
