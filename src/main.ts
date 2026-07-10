@@ -420,6 +420,7 @@ function renderCalendarScreen(): void {
   const calendarDates = getCalendarDates(state.visibleMonth);
   const currentMonth = state.visibleMonth.getMonth();
   const selectedKey = toDateKey(state.selectedDate);
+  const selectedDayStatus = getDayStatus(selectedKey);
   const today = new Date();
 
   requireApp().innerHTML = `
@@ -500,6 +501,11 @@ function renderCalendarScreen(): void {
                 const isBooking = state.bookingSlot === bookingKey;
                 const isOwnReservation = reservation?.user_name === state.user?.name;
                 const action = reservation ? "release" : "book";
+                const slotStatusClass = reservation
+                  ? selectedDayStatus === "full"
+                    ? "slot-full"
+                    : "slot-booked"
+                  : "slot-free";
                 const buttonText = isBooking
                   ? isOwnReservation
                     ? "Gibt frei"
@@ -511,7 +517,7 @@ function renderCalendarScreen(): void {
                     : "Buchen";
 
                 return `
-                  <div class="slot-row ${reservation ? (isOwnReservation ? "slot-own" : "slot-booked") : ""}">
+                  <div class="slot-row ${slotStatusClass}">
                     <div>
                       <strong>${slot.label}</strong>
                       <span>${reservation ? `Gebucht von ${escapeHtml(reservation.user_name)}` : "Verfügbar"}</span>

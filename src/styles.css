@@ -610,12 +610,16 @@ input:focus {
   border-radius: calc(var(--radius) - 2px);
 }
 
-.slot-booked {
-  background: var(--full-bg);
+.slot-free {
+  background: var(--free-bg);
 }
 
-.slot-own {
+.slot-booked {
   background: var(--partial-bg);
+}
+
+.slot-full {
+  background: var(--full-bg);
 }
 
 .slot-row div {
