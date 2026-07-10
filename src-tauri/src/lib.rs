@@ -62,6 +62,11 @@ struct BookSlotResponse {
 }
 
 #[derive(Serialize)]
+struct SlotActionResponse {
+    reservations: Vec<Reservation>,
+}
+
+#[derive(Serialize)]
 struct TokenStatus {
     configured: bool,
 }
@@ -571,6 +576,72 @@ fn book_time_slot(
     Ok(BookSlotResponse { reservations })
 }
 
+#[tauri::command]
+fn release_time_slot(
+    reservation_date: String,
+    start_time: String,
+    end_time: String,
+    user_name: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<SlotActionResponse, String> {
+    let reservation_date = reservation_date.trim();
+    let start_time = start_time.trim();
+    let end_time = end_time.trim();
+    let user_name = user_name.trim();
+
+    if reservation_date.is_empty() || start_time.is_empty() || end_time.is_empty() {
+        return Err("Ungültiger Zeitslot.".into());
+    }
+
+    if user_name.is_empty() {
+        return Err("Bitte melde dich zuerst mit deinem Namen an.".into());
+    }
+
+    let token = read_token(&app)?;
+    let (remote_database, remote_sha) = fetch_remote_database(&token)?;
+    let reservation = remote_database.reservations.iter().find(|reservation| {
+        reservation.reservation_date == reservation_date
+            && reservation.start_time == start_time
+            && reservation.end_time == end_time
+    });
+
+    match reservation {
+        Some(reservation) if reservation.user_name == user_name => {}
+        Some(_) => return Err("Du kannst nur deine eigenen Buchungen freigeben.".into()),
+        None => return Err("Dieser Zeitslot ist nicht mehr gebucht.".into()),
+    }
+
+    let reservations = remote_database
+        .reservations
+        .into_iter()
+        .filter(|reservation| {
+            !(reservation.reservation_date == reservation_date
+                && reservation.start_time == start_time
+                && reservation.end_time == end_time)
+        })
+        .collect::<Vec<_>>();
+    let updated_database = RemoteDatabase {
+        version: 1,
+        reservations: reservations.clone(),
+    };
+
+    push_remote_database(
+        &token,
+        &updated_database,
+        remote_sha,
+        format!(
+            "Release Elowen slot {} {}-{}",
+            reservation_date, start_time, end_time
+        ),
+    )?;
+
+    let mut connection = connect(&state.db_path)?;
+    replace_local_reservations(&mut connection, &reservations)?;
+
+    Ok(SlotActionResponse { reservations })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -591,7 +662,8 @@ pub fn run() {
             save_github_token,
             list_reservations,
             sync_reservations,
-            book_time_slot
+            book_time_slot,
+            release_time_slot
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

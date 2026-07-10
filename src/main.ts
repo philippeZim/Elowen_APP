@@ -17,6 +17,10 @@ type BookSlotResponse = {
   reservations: Reservation[];
 };
 
+type SlotActionResponse = {
+  reservations: Reservation[];
+};
+
 type TokenStatus = {
   configured: boolean;
 };
@@ -306,6 +310,36 @@ async function bookSlot(startTime: string, endTime: string): Promise<void> {
   }
 }
 
+async function releaseSlot(startTime: string, endTime: string): Promise<void> {
+  if (!state.user) {
+    return;
+  }
+
+  const reservationDate = toDateKey(state.selectedDate);
+  const bookingSlot = `${reservationDate}:${startTime}:${endTime}`;
+  state.bookingSlot = bookingSlot;
+  state.syncError = null;
+  render();
+
+  try {
+    const response = await invoke<SlotActionResponse>("release_time_slot", {
+      reservationDate,
+      startTime,
+      endTime,
+      userName: state.user.name,
+    });
+    state.reservations = response.reservations;
+    state.syncError = null;
+  } catch (error) {
+    const releaseError = error instanceof Error ? error.message : String(error);
+    await loadReservations();
+    state.syncError = releaseError;
+  } finally {
+    state.bookingSlot = null;
+    render();
+  }
+}
+
 function showSettings(): void {
   state.screen = "settings";
   render();
@@ -454,21 +488,33 @@ function renderCalendarScreen(): void {
                 );
                 const bookingKey = `${selectedKey}:${slot.startTime}:${slot.endTime}`;
                 const isBooking = state.bookingSlot === bookingKey;
+                const isOwnReservation = reservation?.user_name === state.user?.name;
+                const action = reservation ? "release" : "book";
+                const buttonText = isBooking
+                  ? isOwnReservation
+                    ? "Gibt frei"
+                    : "Bucht"
+                  : reservation
+                    ? isOwnReservation
+                      ? "Freigeben"
+                      : "Belegt"
+                    : "Buchen";
 
                 return `
-                  <div class="slot-row ${reservation ? "slot-booked" : ""}">
+                  <div class="slot-row ${reservation ? (isOwnReservation ? "slot-own" : "slot-booked") : ""}">
                     <div>
                       <strong>${slot.label}</strong>
                       <span>${reservation ? `Gebucht von ${escapeHtml(reservation.user_name)}` : "Verfügbar"}</span>
                     </div>
                     <button
-                      class="button ${reservation ? "button-booked" : "button-secondary"}"
+                      class="button ${reservation ? (isOwnReservation ? "button-secondary" : "button-booked") : "button-secondary"}"
                       type="button"
+                      data-slot-action="${action}"
                       data-start-time="${slot.startTime}"
                       data-end-time="${slot.endTime}"
-                      ${reservation || isBooking ? "disabled" : ""}
+                      ${isBooking || (reservation && !isOwnReservation) ? "disabled" : ""}
                     >
-                      ${isBooking ? "Bucht" : reservation ? "Belegt" : "Buchen"}
+                      ${buttonText}
                     </button>
                   </div>
                 `;
@@ -489,11 +535,16 @@ function renderCalendarScreen(): void {
   document.querySelector("#today-button")?.addEventListener("click", goToToday);
   document.querySelector("#settings-button")?.addEventListener("click", showSettings);
   document.querySelector("#sync-button")?.addEventListener("click", () => void loadReservations());
-  document.querySelectorAll<HTMLButtonElement>("[data-start-time][data-end-time]").forEach((button) => {
+  document.querySelectorAll<HTMLButtonElement>("[data-slot-action][data-start-time][data-end-time]").forEach((button) => {
     button.addEventListener("click", () => {
-      const { startTime, endTime } = button.dataset;
+      const { slotAction, startTime, endTime } = button.dataset;
 
       if (startTime && endTime) {
+        if (slotAction === "release") {
+          void releaseSlot(startTime, endTime);
+          return;
+        }
+
         void bookSlot(startTime, endTime);
       }
     });
