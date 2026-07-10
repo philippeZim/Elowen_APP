@@ -2,7 +2,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{blocking::Client, StatusCode};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::{env, fs, path::PathBuf};
+use std::{env, fmt, fs, path::PathBuf};
 use tauri::{path::BaseDirectory, AppHandle, Manager, State};
 
 include!(concat!(env!("OUT_DIR"), "/bundled_token.rs"));
@@ -15,6 +15,7 @@ const GITHUB_OWNER: &str = "philippeZim";
 const GITHUB_REPO: &str = "Elowen_DB";
 const GITHUB_DB_PATH: &str = "reservations.yml";
 const GITHUB_API_VERSION: &str = "2022-11-28";
+const GITHUB_CONFLICT_RETRIES: usize = 2;
 
 #[derive(Serialize)]
 struct User {
@@ -69,6 +70,20 @@ struct SlotActionResponse {
 #[derive(Serialize)]
 struct TokenStatus {
     configured: bool,
+}
+
+enum GithubWriteError {
+    Conflict,
+    Other(String),
+}
+
+impl fmt::Display for GithubWriteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Conflict => write!(formatter, "GitHub write failed: {}", StatusCode::CONFLICT),
+            Self::Other(message) => formatter.write_str(message),
+        }
+    }
 }
 
 fn connect(db_path: &PathBuf) -> Result<Connection, String> {
@@ -303,27 +318,51 @@ fn push_remote_database(
     database: &RemoteDatabase,
     sha: Option<String>,
     message: String,
-) -> Result<(), String> {
-    let yaml = serde_yaml::to_string(database).map_err(|error| error.to_string())?;
+) -> Result<(), GithubWriteError> {
+    let yaml = serde_yaml::to_string(database)
+        .map_err(|error| GithubWriteError::Other(error.to_string()))?;
     let request = GithubUpdateRequest {
         message,
         content: STANDARD.encode(yaml),
         sha,
     };
-    let response = client()?
+    let response = client()
+        .map_err(GithubWriteError::Other)?
         .put(github_url())
         .bearer_auth(token)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
         .json(&request)
         .send()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| GithubWriteError::Other(error.to_string()))?;
 
     if response.status().is_success() {
         Ok(())
+    } else if response.status() == StatusCode::CONFLICT {
+        Err(GithubWriteError::Conflict)
     } else {
-        Err(format!("GitHub write failed: {}", response.status()))
+        Err(GithubWriteError::Other(format!(
+            "GitHub write failed: {}",
+            response.status()
+        )))
     }
+}
+
+fn current_timestamp(connection: &Connection) -> Result<String, String> {
+    connection
+        .query_row("SELECT CURRENT_TIMESTAMP", [], |row| row.get(0))
+        .map_err(|error| error.to_string())
+}
+
+fn slot_matches(
+    reservation: &Reservation,
+    reservation_date: &str,
+    start_time: &str,
+    end_time: &str,
+) -> bool {
+    reservation.reservation_date == reservation_date
+        && reservation.start_time == start_time
+        && reservation.end_time == end_time
 }
 
 fn replace_local_reservations(
@@ -403,10 +442,124 @@ fn sync_remote_to_local(app: &AppHandle, db_path: &PathBuf) -> Result<Vec<Reserv
             &remote_database,
             None,
             "Create Elowen reservation database".into(),
-        )?;
+        )
+        .map_err(|error| error.to_string())?;
     }
 
     Ok(remote_database.reservations)
+}
+
+fn book_remote_slot(
+    token: &str,
+    reservation_date: &str,
+    start_time: &str,
+    end_time: &str,
+    user_name: &str,
+    created_at: &str,
+) -> Result<Vec<Reservation>, String> {
+    for attempt in 0..=GITHUB_CONFLICT_RETRIES {
+        let (remote_database, remote_sha) = fetch_remote_database(token)?;
+        let slot_is_taken = remote_database
+            .reservations
+            .iter()
+            .any(|reservation| slot_matches(reservation, reservation_date, start_time, end_time));
+
+        if slot_is_taken {
+            return Err("Dieser Zeitslot ist bereits gebucht.".into());
+        }
+
+        let mut reservations = remote_database.reservations;
+        reservations.push(Reservation {
+            reservation_date: reservation_date.to_string(),
+            start_time: start_time.to_string(),
+            end_time: end_time.to_string(),
+            user_name: user_name.to_string(),
+            created_at: created_at.to_string(),
+        });
+
+        let updated_database = RemoteDatabase {
+            version: 1,
+            reservations: reservations.clone(),
+        };
+        let write_result = push_remote_database(
+            token,
+            &updated_database,
+            remote_sha,
+            format!(
+                "Book Elowen slot {} {}-{}",
+                reservation_date, start_time, end_time
+            ),
+        );
+
+        match write_result {
+            Ok(()) => return Ok(reservations),
+            Err(GithubWriteError::Conflict) if attempt < GITHUB_CONFLICT_RETRIES => continue,
+            Err(GithubWriteError::Conflict) => {
+                return Err(
+                    "Die Buchung wurde gleichzeitig geändert. Bitte versuche es erneut.".into(),
+                )
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+
+    Err("Die Buchung wurde gleichzeitig geändert. Bitte versuche es erneut.".into())
+}
+
+fn release_remote_slot(
+    token: &str,
+    reservation_date: &str,
+    start_time: &str,
+    end_time: &str,
+    user_name: &str,
+) -> Result<Vec<Reservation>, String> {
+    for attempt in 0..=GITHUB_CONFLICT_RETRIES {
+        let (remote_database, remote_sha) = fetch_remote_database(token)?;
+        let reservation = remote_database
+            .reservations
+            .iter()
+            .find(|reservation| slot_matches(reservation, reservation_date, start_time, end_time));
+
+        match reservation {
+            Some(reservation) if reservation.user_name == user_name => {}
+            Some(_) => return Err("Du kannst nur deine eigenen Buchungen freigeben.".into()),
+            None => return Err("Dieser Zeitslot ist nicht mehr gebucht.".into()),
+        }
+
+        let reservations = remote_database
+            .reservations
+            .into_iter()
+            .filter(|reservation| {
+                !slot_matches(reservation, reservation_date, start_time, end_time)
+            })
+            .collect::<Vec<_>>();
+        let updated_database = RemoteDatabase {
+            version: 1,
+            reservations: reservations.clone(),
+        };
+        let write_result = push_remote_database(
+            token,
+            &updated_database,
+            remote_sha,
+            format!(
+                "Release Elowen slot {} {}-{}",
+                reservation_date, start_time, end_time
+            ),
+        );
+
+        match write_result {
+            Ok(()) => return Ok(reservations),
+            Err(GithubWriteError::Conflict) if attempt < GITHUB_CONFLICT_RETRIES => continue,
+            Err(GithubWriteError::Conflict) => {
+                return Err(
+                    "Die Buchung wurde gleichzeitig geändert. Bitte versuche es erneut.".into(),
+                )
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+
+    Err("Die Buchung wurde gleichzeitig geändert. Bitte versuche es erneut.".into())
 }
 
 #[tauri::command]
@@ -522,56 +675,17 @@ fn book_time_slot(
     }
 
     let token = read_token(&app)?;
-    let (remote_database, remote_sha) = fetch_remote_database(&token)?;
-    let slot_is_taken = remote_database.reservations.iter().any(|reservation| {
-        reservation.reservation_date == reservation_date
-            && reservation.start_time == start_time
-            && reservation.end_time == end_time
-    });
-
-    if slot_is_taken {
-        let mut connection = connect(&state.db_path)?;
-        replace_local_reservations(&mut connection, &remote_database.reservations)?;
-        return Err("Dieser Zeitslot ist bereits gebucht.".into());
-    }
-
     let mut connection = connect(&state.db_path)?;
-    replace_local_reservations(&mut connection, &remote_database.reservations)?;
-    connection
-        .execute(
-            "
-            INSERT INTO reservations (
-                reservation_date,
-                start_time,
-                end_time,
-                user_name
-            ) VALUES (?1, ?2, ?3, ?4)
-            ",
-            params![reservation_date, start_time, end_time, user_name],
-        )
-        .map_err(|error| {
-            if error.to_string().contains("UNIQUE") {
-                "Dieser Zeitslot ist bereits gebucht.".to_string()
-            } else {
-                error.to_string()
-            }
-        })?;
-
-    let reservations = list_local_reservations(&connection)?;
-    let updated_database = RemoteDatabase {
-        version: 1,
-        reservations: reservations.clone(),
-    };
-
-    push_remote_database(
+    let created_at = current_timestamp(&connection)?;
+    let reservations = book_remote_slot(
         &token,
-        &updated_database,
-        remote_sha,
-        format!(
-            "Book Elowen slot {} {}-{}",
-            reservation_date, start_time, end_time
-        ),
+        reservation_date,
+        start_time,
+        end_time,
+        user_name,
+        &created_at,
     )?;
+    replace_local_reservations(&mut connection, &reservations)?;
 
     Ok(BookSlotResponse { reservations })
 }
@@ -599,42 +713,8 @@ fn release_time_slot(
     }
 
     let token = read_token(&app)?;
-    let (remote_database, remote_sha) = fetch_remote_database(&token)?;
-    let reservation = remote_database.reservations.iter().find(|reservation| {
-        reservation.reservation_date == reservation_date
-            && reservation.start_time == start_time
-            && reservation.end_time == end_time
-    });
-
-    match reservation {
-        Some(reservation) if reservation.user_name == user_name => {}
-        Some(_) => return Err("Du kannst nur deine eigenen Buchungen freigeben.".into()),
-        None => return Err("Dieser Zeitslot ist nicht mehr gebucht.".into()),
-    }
-
-    let reservations = remote_database
-        .reservations
-        .into_iter()
-        .filter(|reservation| {
-            !(reservation.reservation_date == reservation_date
-                && reservation.start_time == start_time
-                && reservation.end_time == end_time)
-        })
-        .collect::<Vec<_>>();
-    let updated_database = RemoteDatabase {
-        version: 1,
-        reservations: reservations.clone(),
-    };
-
-    push_remote_database(
-        &token,
-        &updated_database,
-        remote_sha,
-        format!(
-            "Release Elowen slot {} {}-{}",
-            reservation_date, start_time, end_time
-        ),
-    )?;
+    let reservations =
+        release_remote_slot(&token, reservation_date, start_time, end_time, user_name)?;
 
     let mut connection = connect(&state.db_path)?;
     replace_local_reservations(&mut connection, &reservations)?;

@@ -59,7 +59,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -198,7 +199,8 @@ h2 {
   text-align: left;
 }
 
-input {
+input,
+select {
   height: 42px;
   width: 100%;
   border: 1px solid var(--border);
@@ -212,7 +214,8 @@ input {
     box-shadow 150ms ease;
 }
 
-input:focus {
+input:focus,
+select:focus {
   border-color: var(--ring);
   box-shadow: 0 0 0 3px hsl(222.2 84% 4.9% / 0.12);
 }
@@ -299,6 +302,28 @@ input:focus {
   margin-bottom: 12px;
 }
 
+.status-row {
+  margin: -6px 0 12px;
+  color: var(--muted);
+  font-size: 0.825rem;
+  font-weight: 650;
+}
+
+.weather-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -6px 0 12px;
+  color: var(--muted);
+  font-size: 0.825rem;
+  font-weight: 650;
+}
+
+.weather-summary span:last-child {
+  text-align: right;
+}
+
 .app-shell {
   padding: calc(32px + env(safe-area-inset-top, 0px)) 24px
     calc(24px + env(safe-area-inset-bottom, 0px));
@@ -353,7 +378,9 @@ input:focus {
   border-top: 1px solid var(--border);
 }
 
-.settings-token-row {
+.settings-token-row,
+.settings-location-row,
+.settings-sync-row {
   align-items: flex-start;
 }
 
@@ -363,14 +390,131 @@ input:focus {
   font-size: 0.875rem;
 }
 
-.token-controls {
+.settings-controls {
   width: min(100%, 360px);
   display: flex;
   gap: 8px;
 }
 
-.token-controls input {
+.settings-controls input {
   min-width: 0;
+}
+
+.settings-inline-controls {
+  align-items: flex-end;
+}
+
+.settings-number-field {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 6px;
+  color: var(--foreground);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.settings-select {
+  min-width: 0;
+  position: relative;
+  flex: 1 1 auto;
+}
+
+.settings-select-trigger {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--foreground);
+  background: var(--card);
+  text-align: left;
+}
+
+.settings-select-trigger:focus-visible,
+.settings-select.is-open .settings-select-trigger {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px hsl(222.2 84% 4.9% / 0.12);
+}
+
+.settings-select-chevron {
+  width: 16px;
+  height: 16px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.settings-select-chevron svg,
+.settings-select-check svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.settings-select.is-open .settings-select-chevron {
+  transform: rotate(180deg);
+}
+
+.settings-select-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--card);
+  box-shadow:
+    0 12px 32px rgba(15, 23, 42, 0.14),
+    0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+.settings-select-list {
+  max-height: 280px;
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.settings-select-option {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(var(--radius) - 4px);
+  color: var(--foreground);
+  background: transparent;
+  text-align: left;
+}
+
+.settings-select-option:hover,
+.settings-select-option:focus-visible {
+  background: var(--muted-bg);
+  outline: none;
+}
+
+.settings-select-option.is-selected {
+  background: var(--muted-bg);
+}
+
+.settings-select-check {
+  width: 16px;
+  height: 16px;
+  color: var(--foreground);
+  flex: 0 0 auto;
 }
 
 .calendar-layout {
@@ -601,9 +745,9 @@ input:focus {
 }
 
 .slot-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   padding: 12px;
   border: 1px solid var(--border);
@@ -622,7 +766,8 @@ input:focus {
   background: var(--full-bg);
 }
 
-.slot-row div {
+.slot-main {
+  min-width: 0;
   display: grid;
   gap: 2px;
 }
@@ -634,6 +779,28 @@ input:focus {
 .slot-row span {
   color: var(--muted);
   font-size: 0.825rem;
+}
+
+.slot-row .slot-weather {
+  min-width: 98px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--foreground);
+  font-size: 0.875rem;
+  font-weight: 650;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.slot-row .slot-weather-icon {
+  width: 42px;
+  height: 42px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 2.55rem;
+  line-height: 1;
 }
 
 @media (max-width: 840px) {
@@ -686,11 +853,31 @@ input:focus {
 
   .slot-row {
     align-items: flex-start;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .slot-row .slot-weather {
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .slot-row .button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .weather-summary {
+    align-items: flex-start;
     flex-direction: column;
+    gap: 2px;
+  }
+
+  .weather-summary span:last-child {
+    text-align: left;
   }
 
   .settings-row,
-  .token-controls {
+  .settings-controls {
     align-items: stretch;
     flex-direction: column;
   }
